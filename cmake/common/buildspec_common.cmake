@@ -171,6 +171,7 @@ function(_check_dependencies)
     endif()
 
     if(dependency STREQUAL obs-studio)
+      string(REPLACE "VERSION" "${version}" url "${url}")
       set(url ${url}/${file})
     else()
       set(url ${url}/${version}/${file})

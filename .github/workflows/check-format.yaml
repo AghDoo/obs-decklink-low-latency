@@ -25,3 +25,52 @@ jobs:
         uses: ./.github/actions/run-gersemi
         with:
           failCondition: error
+
+  format-export:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/obs33-windows-foundation'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Formatter Dependencies
+        shell: bash
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo "/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin" >> "$GITHUB_PATH"
+          echo "/home/linuxbrew/.linuxbrew/opt/clang-format@19/bin" >> "$GITHUB_PATH"
+          brew install --quiet zsh
+
+      - name: Apply Formatters
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        run: |
+          brew install --quiet obsproject/tools/clang-format@19
+          ./build-aux/run-clang-format --fail-never \
+            src/decklink/DeckLinkOutput.cpp \
+            src/decklink/DeckLinkOutput.hpp \
+            src/decklink/DecklinkBase.cpp \
+            src/decklink/DecklinkBase.h \
+            src/decklink/decklink-device-instance.cpp \
+            src/decklink/decklink-device-instance.hpp \
+            src/decklink/decklink-output.cpp \
+            src/decklink/plugin-main.cpp \
+            src/decklink/const.h
+
+          brew install --quiet obsproject/tools/gersemi
+          ./build-aux/run-gersemi --fail-never CMakeLists.txt
+
+      - name: Collect Formatted Files
+        shell: bash
+        run: |
+          mkdir -p format-output/src/decklink
+          cp CMakeLists.txt format-output/
+          cp src/decklink/*.cpp format-output/src/decklink/
+          cp src/decklink/*.hpp format-output/src/decklink/
+          cp src/decklink/*.h format-output/src/decklink/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-decklink-format-export
+          path: format-output/
+          retention-days: 1

@@ -66,8 +66,8 @@ public:
 		form->addRow(&startButton, &stopButton);
 
 		const BPtr<char> path = obs_module_config_path(settingsFile);
-		if (path) {
-			settings = obs_data_create_from_json_file_safe(path, "bak");
+		if (path.Get()) {
+			settings = obs_data_create_from_json_file_safe(path.Get(), "bak");
 		}
 		if (!settings) {
 			settings = obs_data_create();
@@ -158,8 +158,8 @@ private:
 		obs_data_set_int(settings, MODE_ID, mode.currentData().toLongLong());
 		obs_data_set_int(settings, BUFFER_COUNT, buffers.currentData().toLongLong());
 		const BPtr<char> path = obs_module_config_path(settingsFile);
-		if (path && QDir().mkpath(QFileInfo(QString::fromUtf8(path.Get())).absolutePath())) {
-			if (!obs_data_save_json_safe(settings, path, "tmp", "bak")) {
+		if (path.Get() && QDir().mkpath(QFileInfo(QString::fromUtf8(path.Get())).absolutePath())) {
+			if (!obs_data_save_json_safe(settings, path.Get(), "tmp", "bak")) {
 				blog(LOG_WARNING, "Could not save DeckLink Low Latency output settings");
 			}
 		}

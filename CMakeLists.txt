@@ -12,7 +12,7 @@ if(NOT WIN32)
   message(FATAL_ERROR "OBS DeckLink Low Latency currently targets Windows x64 only.")
 endif()
 
-set(OBS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-${_version}")
+set(OBS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-${_version}-sources")
 set(OBS_DECKLINK_SOURCE_DIR "${OBS_SOURCE_DIR}/plugins/decklink")
 set(OBS_DECKLINK_SDK_DIR "${OBS_DECKLINK_SOURCE_DIR}/win/decklink-sdk")
 

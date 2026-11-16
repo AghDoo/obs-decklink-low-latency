@@ -2,6 +2,8 @@
 
 #include "decklink-device.hpp"
 
+#include <limits>
+
 DeckLinkOutput::DeckLinkOutput(obs_output_t *output_, DeckLinkDeviceDiscovery *discovery_)
 	: DecklinkBase(discovery_), output(output_)
 {

@@ -244,8 +244,7 @@ static obs_properties_t *decklink_output_properties(void *data)
 	obs_property_set_modified_callback(deviceList, decklink_output_device_changed);
 	fill_out_devices(deviceList);
 
-	obs_property_t *modeList =
-		obs_properties_add_list(props, MODE_ID, TEXT_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_properties_add_list(props, MODE_ID, TEXT_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 
 	if (decklink && decklink->deviceHash && *decklink->deviceHash) {
 		obs_data_t *settings = obs_data_create();

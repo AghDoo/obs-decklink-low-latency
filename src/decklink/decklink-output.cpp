@@ -10,10 +10,37 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 static void decklink_output_destroy(void *data)
 {
 	delete static_cast<DeckLinkOutput *>(data);
+}
+
+static void decklink_output_set_video_conversion(DeckLinkOutput *decklink)
+{
+	if (!decklink->deviceHash || !*decklink->deviceHash) {
+		return;
+	}
+
+	ComPtr<DeckLinkDevice> device;
+	device.Set(deviceEnum->FindByHash(decklink->deviceHash));
+	if (!device) {
+		return;
+	}
+
+	DeckLinkDeviceMode *mode = device->FindOutputMode(decklink->modeID);
+	if (!mode) {
+		return;
+	}
+
+	struct video_scale_info conversion = {};
+	conversion.format = VIDEO_FORMAT_BGRA;
+	conversion.width = mode->GetWidth();
+	conversion.height = mode->GetHeight();
+	conversion.range = VIDEO_RANGE_FULL;
+	conversion.colorspace = VIDEO_CS_709;
+	obs_output_set_video_conversion(decklink->GetOutput(), &conversion);
 }
 
 static void *decklink_output_create(obs_data_t *settings, obs_output_t *output)
@@ -23,21 +50,7 @@ static void *decklink_output_create(obs_data_t *settings, obs_output_t *output)
 	decklink->modeID = obs_data_get_int(settings, MODE_ID);
 	decklink->SetBufferCount(static_cast<int>(obs_data_get_int(settings, BUFFER_COUNT)));
 
-	ComPtr<DeckLinkDevice> device;
-	device.Set(deviceEnum->FindByHash(decklink->deviceHash));
-	if (device) {
-		DeckLinkDeviceMode *mode = device->FindOutputMode(decklink->modeID);
-		if (mode) {
-			struct video_scale_info conversion = {};
-			conversion.format = VIDEO_FORMAT_BGRA;
-			conversion.width = mode->GetWidth();
-			conversion.height = mode->GetHeight();
-			conversion.range = VIDEO_RANGE_FULL;
-			conversion.colorspace = VIDEO_CS_709;
-			obs_output_set_video_conversion(output, &conversion);
-		}
-	}
-
+	decklink_output_set_video_conversion(decklink);
 	return decklink;
 }
 
@@ -47,6 +60,7 @@ static void decklink_output_update(void *data, obs_data_t *settings)
 	decklink->deviceHash = obs_data_get_string(settings, DEVICE_HASH);
 	decklink->modeID = obs_data_get_int(settings, MODE_ID);
 	decklink->SetBufferCount(static_cast<int>(obs_data_get_int(settings, BUFFER_COUNT)));
+	decklink_output_set_video_conversion(decklink);
 }
 
 static void decklink_output_defaults(obs_data_t *settings)
@@ -69,7 +83,7 @@ static bool decklink_output_start(void *data)
 		return false;
 	}
 
-	decklink->audio_samplerate = audioInfo.samples_per_sec;
+	decklink->audio_samplerate = 48000;
 	decklink->audio_planes = 2;
 	decklink->audio_size = get_audio_size(AUDIO_FORMAT_16BIT, SPEAKERS_STEREO, 1);
 	decklink->start_timestamp = 0;
@@ -246,8 +260,7 @@ static const char *decklink_output_get_name(void *)
 
 static int decklink_output_get_dropped_frames(void *data)
 {
-	UNUSED_PARAMETER(data);
-	return 0;
+	return static_cast<DeckLinkOutput *>(data)->GetDroppedFrames();
 }
 
 struct obs_output_info create_decklink_output_info()

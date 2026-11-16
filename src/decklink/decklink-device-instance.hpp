@@ -12,6 +12,8 @@
 #define LOG(level, message, ...) blog(level, "%s: " message, "decklink-low-latency", ##__VA_ARGS__)
 
 class DecklinkBase;
+struct audio_data;
+struct video_data;
 
 class FrameQueue {
 private:

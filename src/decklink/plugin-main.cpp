@@ -1,7 +1,8 @@
 #include <obs-module.h>
-#include <oleauto.h>
 
 #include "decklink-devices.hpp"
+
+#include <oleauto.h>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-decklink-low-latency", "en-US")

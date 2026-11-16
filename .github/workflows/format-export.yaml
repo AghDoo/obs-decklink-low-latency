@@ -1,0 +1,62 @@
+name: Temporary Formatter Export
+on:
+  pull_request:
+    branches: [master]
+    types: [synchronize]
+permissions:
+  contents: read
+jobs:
+  format-export:
+    if: github.head_ref == 'feat/obs33-windows-foundation'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install Formatters
+        shell: bash
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo "/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin" >> "$GITHUB_PATH"
+          echo "/home/linuxbrew/.linuxbrew/opt/clang-format@19/bin" >> "$GITHUB_PATH"
+          brew install --quiet zsh
+          brew install --quiet obsproject/tools/clang-format@19
+          brew install --quiet obsproject/tools/gersemi
+
+      - name: Format C++ and CMake
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        run: |
+          ./build-aux/run-clang-format \
+            src/decklink/DeckLinkOutput.cpp \
+            src/decklink/DeckLinkOutput.hpp \
+            src/decklink/DecklinkBase.cpp \
+            src/decklink/DecklinkBase.h \
+            src/decklink/decklink-device-instance.cpp \
+            src/decklink/decklink-device-instance.hpp \
+            src/decklink/decklink-output.cpp \
+            src/decklink/plugin-main.cpp \
+            src/decklink/const.h
+          ./build-aux/run-gersemi CMakeLists.txt
+
+      - name: Collect Formatted Files
+        shell: bash
+        run: |
+          mkdir -p format-output/src/decklink
+          cp CMakeLists.txt format-output/
+          cp src/decklink/DeckLinkOutput.cpp format-output/src/decklink/
+          cp src/decklink/DeckLinkOutput.hpp format-output/src/decklink/
+          cp src/decklink/DecklinkBase.cpp format-output/src/decklink/
+          cp src/decklink/DecklinkBase.h format-output/src/decklink/
+          cp src/decklink/decklink-device-instance.cpp format-output/src/decklink/
+          cp src/decklink/decklink-device-instance.hpp format-output/src/decklink/
+          cp src/decklink/decklink-output.cpp format-output/src/decklink/
+          cp src/decklink/plugin-main.cpp format-output/src/decklink/
+          cp src/decklink/const.h format-output/src/decklink/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-decklink-format-export
+          path: format-output/
+          retention-days: 1

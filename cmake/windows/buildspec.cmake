@@ -16,7 +16,7 @@ function(_check_dependencies_windows)
   set(qt6_destination "obs-deps-qt6-VERSION-ARCH")
   set(obs-studio_filename "OBS-Studio-VERSION-Sources.tar.gz")
   set(obs-studio_destination "obs-studio-VERSION-sources")
-  set(dependencies_list prebuilt obs-studio)
+  set(dependencies_list prebuilt qt6 obs-studio)
 
   _check_dependencies()
 endfunction()

@@ -17,6 +17,7 @@ Initial target configuration:
 ## Current implementation
 
 - Registers a separate output type: `obs_decklink_low_latency_output`
+- Provides a separate OBS frontend module for selecting the device, output mode and frame-buffer count, and starting or stopping Program output.
 - Does not replace or overwrite OBS's built-in DeckLink module.
 - Reuses the pinned OBS 33.0.1 DeckLink device discovery and device-mode implementation from the downloaded OBS source dependency.
 - Uses an independent output scheduler and a bounded, mutex-protected frame-buffer ring.
@@ -32,17 +33,21 @@ Blackmagic documents `bmdDeckLinkConfigLowLatencyVideoOutput` as reducing latenc
 
 ## OBS 33 plugin installation
 
-The Windows package uses the OBS 33 third-party plugin layout:
+Download the Windows x64 `modules` artifact from the GitHub Actions run. Close OBS and copy both extracted folders into `C:\ProgramData\obs-studio\plugins\`:
 
 ```text
-C:\ProgramData\obs-studio\plugins\obs-decklink-low-latency\
-├── obs-decklink-low-latency.dll
-└── data\
-    └── locale\
-        └── en-US.ini
+C:\ProgramData\obs-studio\plugins\
+├── obs-decklink-low-latency\
+│   ├── obs-decklink-low-latency.dll
+│   └── data\locale\en-US.ini
+└── obs-decklink-low-latency-ui\
+    ├── obs-decklink-low-latency-ui.dll
+    └── data\locale\
+        ├── en-US.ini
+        └── zh-TW.ini
 ```
 
-The plugin is independent of the existing built-in DeckLink module.
+Restart OBS and open **Tools → DeckLink Low Latency Output**. Select the device and video mode, then click **Start output**. Stop the built-in DeckLink output first if it is using the same device.
 
 ## Build environment
 
@@ -51,6 +56,8 @@ The plugin is independent of the existing built-in DeckLink module.
 - Windows SDK: 10.0.26100
 - CMake: 4.2 or newer
 - Windows x64 only for this prototype
+- GitHub-hosted runner: `windows-2025-vs2026`
+- Qt 6 Widgets and OBS Frontend API for the UI module
 
 The DeckLink COM interfaces are generated at build time with MIDL from the SDK IDL files included in the pinned OBS source dependency. The project does not vendor a second copy of the DeckLink SDK.
 

@@ -85,15 +85,43 @@ jobs:
           target: x64
           config: ${{ needs.check-event.outputs.config }}
 
-      - name: Package Plugin
+      - name: Verify Module Layout
+        env:
+          PLUGIN_NAME: ${{ steps.setup.outputs.pluginName }}
+          BUILD_CONFIG: ${{ needs.check-event.outputs.config }}
+        run: |
+          $modules = @($env:PLUGIN_NAME, "${env:PLUGIN_NAME}-ui")
+          foreach ($module in $modules) {
+            $directory = "release/$env:BUILD_CONFIG/$module"
+            foreach ($required in @("$module.dll", 'data/locale/en-US.ini')) {
+              $file = Join-Path $directory $required
+              if (!(Test-Path -LiteralPath $file -PathType Leaf)) {
+                throw "Missing module file: $file"
+              }
+            }
+          }
+
+      - name: Package Tagged Release
+        if: github.ref_type == 'tag'
         uses: ./.github/actions/package-plugin
         with:
           target: x64
           config: ${{ needs.check-event.outputs.config }}
           package: ${{ needs.check-event.outputs.package }}
 
-      - name: Upload Windows Artifact
+      - name: Upload Module Folders
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-windows-x64-modules-${{ needs.check-event.outputs.commitHash }}
+          path: |
+            release/${{ needs.check-event.outputs.config }}/
+            !release/${{ needs.check-event.outputs.config }}/**/*.pdb
+          if-no-files-found: error
+
+      - name: Upload Tagged Release Archive
+        if: github.ref_type == 'tag'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-windows-x64-${{ needs.check-event.outputs.commitHash }}
           path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-windows-x64*.*
+          if-no-files-found: error

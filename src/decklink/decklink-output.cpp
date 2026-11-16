@@ -286,7 +286,7 @@ static int decklink_output_get_dropped_frames(void *data)
 struct obs_output_info create_decklink_output_info()
 {
 	struct obs_output_info info = {};
-	info.id = "obs_decklink_low_latency_output";
+	info.id = OBS_DECKLINK_LOW_LATENCY_OUTPUT_ID;
 	info.flags = OBS_OUTPUT_AV;
 	info.get_name = decklink_output_get_name;
 	info.create = decklink_output_create;

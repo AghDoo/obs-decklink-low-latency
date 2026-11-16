@@ -123,6 +123,7 @@ int DeckLinkOutput::GetBufferCount() const
 
 int DeckLinkOutput::GetDroppedFrames() const
 {
+	std::lock_guard<std::recursive_mutex> lock(deviceMutex);
 	if (!instance) {
 		return 0;
 	}

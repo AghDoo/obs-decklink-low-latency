@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 #include <util/platform.h>
 
@@ -92,6 +93,11 @@ long long DeckLinkDeviceInstance::GetActiveModeId() const
 int DeckLinkDeviceInstance::GetBufferCount() const
 {
 	return bufferCount;
+}
+
+uint64_t DeckLinkDeviceInstance::GetDroppedFrames() const
+{
+	return droppedFrames.load(std::memory_order_relaxed);
 }
 
 bool DeckLinkDeviceInstance::StartOutput(DeckLinkDeviceMode *mode_, int bufferCount_)

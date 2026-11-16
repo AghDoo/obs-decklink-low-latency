@@ -1,59 +1,48 @@
-# OBS Plugin Template
+# OBS DeckLink Low Latency
 
-## Introduction
+An independent OBS Studio output plugin project focused on reducing avoidable buffering in Blackmagic DeckLink HDMI output.
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+## Target workflow
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+`OBS A Program → DeckLink Mini Monitor HD → HDMI → AVerMedia GC551G2 → OBS B`
 
-## Supported Build Environments
+Initial target configuration:
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+- DeckLink Mini Monitor HD (BMDPCB218B)
+- 1920×1080 at 24000/1001 FPS (23.976)
+- BGRA video output
+- Stereo HDMI audio
+- OBS Studio 33.0.1 on Windows x64
 
-## Quick Start
+## Design goals
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+- Add a separate OBS output plugin; do not replace or overwrite OBS's built-in DeckLink module.
+- Keep the official DeckLink output available as a fallback.
+- Inspect the device-reported minimum preroll depth before offering lower-latency overrides.
+- Treat hardware preroll depth and CPU frame-buffer rotation as separate mechanisms.
+- Preserve synchronized stereo audio.
+- Measure end-to-end latency through the GC551G2 rather than assuming that a smaller software queue guarantees a specific latency.
 
-## Documentation
+## OBS 33 plugin installation
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+The Windows package is intended to use the OBS 33 third-party plugin layout:
 
-Suggested reading to get up and running:
+```text
+C:\ProgramData\obs-studio\plugins\obs-decklink-low-latency\
+├── obs-decklink-low-latency.dll
+└── data\
+```
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+The plugin is independent of the existing built-in DeckLink DLL.
 
-## GitHub Actions & CI
+## Build environment
 
-Default GitHub Actions workflows are available for the following repository actions:
+- OBS Studio sources: 33.0.1
+- Visual Studio: 2026
+- Windows SDK: 10.0.26100
+- CMake: 4.2 or newer
+- Qt 6 and OBS Frontend API enabled
 
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
+## Current status
 
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
-
-### Retrieving build artifacts
-
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
-
-### Building a Release
-
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
-
-## Signing and Notarizing on macOS
-
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+**Foundation stage only.** This commit updates the project identity, OBS 33 build dependencies, Windows toolchain, and plugin installation layout. The DeckLink output engine and user interface have not been implemented yet.

@@ -8,7 +8,7 @@
   "configurePresets": [
     {
       "name": "template",
-      "hidden": true,
+      "hidden": true
     },
     {
       "name": "macos",

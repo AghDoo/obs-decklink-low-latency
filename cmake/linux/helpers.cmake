@@ -26,7 +26,7 @@ function(set_target_properties_plugin target)
   install(
     TARGETS ${target}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-modules/plugins
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/obs-plugins
   )
 
   if(TARGET plugin-support)
@@ -36,9 +36,9 @@ function(set_target_properties_plugin target)
   add_custom_command(
     TARGET ${target}
     POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>/${target}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>"
     COMMAND
-      "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:${target}>" "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>/${target}"
+      "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:${target}>" "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>"
     COMMENT "Copy ${target} to rundir"
     VERBATIM
   )
@@ -70,7 +70,7 @@ function(target_install_resources target)
 
     install(
       DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/"
-      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-modules/plugins/${target}
+      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-plugins/${target}
       USE_SOURCE_PERMISSIONS
     )
 
@@ -91,7 +91,7 @@ endfunction()
 function(target_add_resource target resource)
   message(DEBUG "Add resource '${resource}' to target ${target} at destination '${target_destination}'...")
 
-  install(FILES "${resource}" DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-modules/plugins/${target})
+  install(FILES "${resource}" DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/obs/obs-plugins/${target})
 
   add_custom_command(
     TARGET ${target}

@@ -280,6 +280,9 @@ void DeckLinkDeviceInstance::UpdateVideoFrame(video_data *frame)
 	// allowing stale frames to build up behind the DeckLink playback clock.
 	if (!blob) {
 		blob = readyFrames.pop();
+		if (blob) {
+			droppedFrames.fetch_add(1, std::memory_order_relaxed);
+		}
 	}
 
 	if (!blob) {

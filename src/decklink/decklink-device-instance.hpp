@@ -112,6 +112,7 @@ public:
 	DeckLinkDevice *GetDevice() const;
 	long long GetActiveModeId() const;
 	int GetBufferCount() const;
+	uint64_t GetDroppedFrames() const;
 
 	bool StartOutput(DeckLinkDeviceMode *mode_, int bufferCount_);
 	bool StopOutput();

@@ -209,7 +209,7 @@ bool DeckLinkDeviceInstance::StartOutput(DeckLinkDeviceMode *mode_, int bufferCo
 		}
 	}
 
-	totalFramesScheduled = static_cast<uint64_t>(minimumPrerollFrames);
+	totalFramesScheduled = minimumPrerollFrames;
 	*renderDelegate.Assign() = new RenderDelegate<DeckLinkDeviceInstance>(this);
 
 	output = std::move(output_);

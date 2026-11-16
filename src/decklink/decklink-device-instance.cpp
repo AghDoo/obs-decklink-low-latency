@@ -209,17 +209,6 @@ void DeckLinkDeviceInstance::SendFrames(IDeckLinkOutput *output, const VideoFram
 				pendingSlot = 1 - pendingSlot;
 				videoPending = false;
 			}
-			if (firstVideoTimestamp && !audio && !audioQueue.empty()) {
-				queuedAudioFrames -= audioQueue.front().frameCount();
-				audio.emplace(std::move(audioQueue.front()));
-				audioQueue.pop_front();
-				const uint64_t trim = *firstVideoTimestamp > audio->timestamp
-							      ? *firstVideoTimestamp - audio->timestamp
-							      : 0;
-				audioOffset = static_cast<size_t>(std::min<uint64_t>(
-					audio->frameCount(), util_mul_div64(trim, audioSampleRate, 1000000000ULL)));
-				audioRetryAt = Clock::time_point::min();
-			}
 		}
 
 		if (videoSlot) {
@@ -244,27 +233,45 @@ void DeckLinkDeviceInstance::SendFrames(IDeckLinkOutput *output, const VideoFram
 			}
 		}
 
-		if (!audio || Clock::now() < audioRetryAt) {
-			continue;
-		}
-		const size_t remaining = audio->frameCount() - audioOffset;
-		if (remaining == 0 || Clock::now() - audio->received >= maxAudioAge) {
-			droppedAudioFrames.fetch_add(remaining, std::memory_order_relaxed);
-			audio.reset();
-			continue;
-		}
-
-		uint32_t written = 0;
-		const HRESULT result =
-			output->WriteAudioSamplesSync(audio->samples.data() + audioOffset * audioChannels,
-						      static_cast<uint32_t>(remaining), &written);
-		if (result != S_OK) {
-			if (++audioErrors == 1) {
-				LOG(LOG_ERROR, "WriteAudioSamplesSync failed: 0x%08lX", result);
+		// 一次影像呼叫期間可能收到多個 PCM 區塊，依序送出已可用的樣本。
+		size_t audioBudget = maxQueuedAudioFrames;
+		while (firstVideoTimestamp && audioBudget > 0 && Clock::now() >= audioRetryAt) {
+			if (!audio) {
+				std::lock_guard<std::mutex> lock(mutex);
+				if (stopping || audioQueue.empty()) {
+					break;
+				}
+				queuedAudioFrames -= audioQueue.front().frameCount();
+				audio.emplace(std::move(audioQueue.front()));
+				audioQueue.pop_front();
+				const uint64_t trim = *firstVideoTimestamp > audio->timestamp
+							      ? *firstVideoTimestamp - audio->timestamp
+							      : 0;
+				audioOffset = static_cast<size_t>(std::min<uint64_t>(
+					audio->frameCount(), util_mul_div64(trim, audioSampleRate, 1000000000ULL)));
 			}
-			droppedAudioFrames.fetch_add(remaining, std::memory_order_relaxed);
-			audio.reset();
-		} else {
+
+			const size_t remaining = audio->frameCount() - audioOffset;
+			audioBudget -= std::min(audioBudget, audio->frameCount());
+			if (remaining == 0 || Clock::now() - audio->received >= maxAudioAge) {
+				droppedAudioFrames.fetch_add(remaining, std::memory_order_relaxed);
+				audio.reset();
+				continue;
+			}
+
+			uint32_t written = 0;
+			const HRESULT result =
+				output->WriteAudioSamplesSync(audio->samples.data() + audioOffset * audioChannels,
+							      static_cast<uint32_t>(remaining), &written);
+			if (result != S_OK) {
+				if (++audioErrors == 1) {
+					LOG(LOG_ERROR, "WriteAudioSamplesSync failed: 0x%08lX", result);
+				}
+				droppedAudioFrames.fetch_add(remaining, std::memory_order_relaxed);
+				audio.reset();
+				continue;
+			}
+
 			const size_t accepted = std::min<size_t>(written, remaining);
 			if (accepted > 0 && audioSubmitted == 0) {
 				LOG(LOG_INFO,
@@ -272,13 +279,13 @@ void DeckLinkDeviceInstance::SendFrames(IDeckLinkOutput *output, const VideoFram
 				    written);
 			}
 			audioSubmitted += accepted;
-			if (accepted == remaining) {
-				audio.reset();
-			} else {
+			if (accepted < remaining) {
 				++audioPartialWrites;
 				audioOffset += accepted;
 				audioRetryAt = Clock::now() + std::chrono::milliseconds(2);
+				break;
 			}
+			audio.reset();
 		}
 	}
 

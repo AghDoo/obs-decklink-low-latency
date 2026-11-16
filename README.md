@@ -9,7 +9,7 @@ An independent Windows OBS output plugin prototype focused on reducing avoidable
 Initial target configuration:
 
 - DeckLink Mini Monitor HD (BMDPCB218B)
-- 1920×1080 at 24000/1001 FPS (23.976)
+- 1920×1080 at 24 FPS
 - BGRA video output
 - Stereo, 48 kHz, 16-bit PCM HDMI audio
 - OBS Studio 33.0.1 on Windows x64
@@ -17,7 +17,7 @@ Initial target configuration:
 ## Current implementation
 
 - Registers a separate output type: `obs_decklink_low_latency_output`
-- Provides a separate OBS frontend module for selecting the device, output mode and frame-buffer count, and starting or stopping Program output.
+- Provides a separate OBS frontend dock for selecting the device, output mode and frame-buffer count, and starting or stopping Program output.
 - Does not replace or overwrite OBS's built-in DeckLink module.
 - Reuses the pinned OBS 33.0.1 DeckLink device discovery and device-mode implementation from the downloaded OBS source dependency.
 - Uses an independent output scheduler and a bounded, mutex-protected frame-buffer ring.
@@ -47,7 +47,9 @@ C:\ProgramData\obs-studio\plugins\
         └── zh-TW.ini
 ```
 
-Restart OBS and open **Tools → DeckLink Low Latency Output**. Select the device and video mode, then click **Start output**. Stop the built-in DeckLink output first if it is using the same device.
+Restart OBS and open **Docks → DeckLink Low Latency Output**. You can dock the panel by dragging its title bar. The **Tools** menu can also open the panel. Select the device and video mode, then click **Start output**.
+
+Enable **Automatically start output when OBS opens** to use the saved device and mode after OBS starts, including when the dock is hidden. The saved device and mode must be available. Disable auto-start in the built-in DeckLink output if it uses the same device.
 
 ## Build environment
 
@@ -67,7 +69,7 @@ The DeckLink COM interfaces are generated at build time with MIDL from the SDK I
 
 The GitHub Actions Windows build must pass before a binary is considered usable. Runtime testing is still required on the Mini Monitor HD, including:
 
-1. Confirming device discovery and supported 1080p23.976 mode enumeration.
+1. Confirming device discovery and supported 1080p24 mode enumeration.
 2. Verifying continuous HDMI video and stereo audio.
 3. Comparing the 2-buffer and 3-buffer modes for dropped frames and stability.
 4. Measuring end-to-end latency through the GC551G2.

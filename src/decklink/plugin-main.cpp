@@ -1,4 +1,5 @@
 #include <obs-module.h>
+#include <oleauto.h>
 
 #include "decklink-devices.hpp"
 

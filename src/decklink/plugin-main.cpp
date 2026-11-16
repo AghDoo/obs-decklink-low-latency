@@ -6,8 +6,6 @@
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("obs-decklink-low-latency", "en-US")
 
-DeckLinkDeviceDiscovery *deviceEnum = nullptr;
-
 extern struct obs_output_info create_decklink_output_info();
 
 MODULE_EXPORT const char *obs_module_description(void)

@@ -234,16 +234,37 @@ static bool decklink_output_device_changed(obs_properties_t *props, obs_property
 	return true;
 }
 
-static obs_properties_t *decklink_output_properties(void *)
+static obs_properties_t *decklink_output_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
+	auto *decklink = static_cast<DeckLinkOutput *>(data);
 
 	obs_property_t *deviceList =
 		obs_properties_add_list(props, DEVICE_HASH, TEXT_DEVICE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_set_modified_callback(deviceList, decklink_output_device_changed);
 	fill_out_devices(deviceList);
 
-	obs_properties_add_list(props, MODE_ID, TEXT_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_t *modeList =
+		obs_properties_add_list(props, MODE_ID, TEXT_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+
+	if (decklink && decklink->deviceHash && *decklink->deviceHash) {
+		obs_data_t *settings = obs_data_create();
+		obs_data_set_string(settings, DEVICE_HASH, decklink->deviceHash);
+		obs_data_set_int(settings, MODE_ID, decklink->modeID);
+
+		ComPtr<DeckLinkDevice> device;
+		device.Set(deviceEnum->FindByHash(decklink->deviceHash));
+		if (device) {
+			obs_data_set_string(settings, DEVICE_NAME, device->GetDisplayName().c_str());
+			DeckLinkDeviceMode *mode = device->FindOutputMode(decklink->modeID);
+			if (mode) {
+				obs_data_set_string(settings, MODE_NAME, mode->GetName().c_str());
+			}
+		}
+
+		decklink_output_device_changed(props, deviceList, settings);
+		obs_data_release(settings);
+	}
 
 	obs_property_t *bufferList =
 		obs_properties_add_list(props, BUFFER_COUNT, TEXT_BUFFER_COUNT, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);

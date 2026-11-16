@@ -49,8 +49,6 @@ jobs:
           ./build-aux/run-clang-format --fail-never \
             src/decklink/DeckLinkOutput.cpp \
             src/decklink/DeckLinkOutput.hpp \
-            src/decklink/DecklinkBase.cpp \
-            src/decklink/DecklinkBase.h \
             src/decklink/decklink-device-instance.cpp \
             src/decklink/decklink-device-instance.hpp \
             src/decklink/decklink-output.cpp \

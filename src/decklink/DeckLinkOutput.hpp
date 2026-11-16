@@ -1,41 +1,30 @@
 #pragma once
 
-#include "DecklinkBase.h"
+#include "decklink-device-instance.hpp"
 
-#include <media-io/video-scaler.h>
+#include <obs.h>
 
-class DeckLinkOutput final : public DecklinkBase {
-protected:
-	obs_output_t *output = nullptr;
-	int width = 0;
-	int height = 0;
-	int bufferCount = 2;
+#include <memory>
+#include <mutex>
+#include <string>
 
-	static void DevicesChanged(void *param, DeckLinkDevice *device, bool added);
-
+class DeckLinkOutput final {
 public:
-	const char *deviceHash = nullptr;
-	long long modeID = 0;
-	uint64_t start_timestamp = 0;
-	uint32_t audio_samplerate = 48000;
-	size_t audio_planes = 2;
-	size_t audio_size = 0;
+	explicit DeckLinkOutput(obs_output_t *output);
 
-	DeckLinkOutput(obs_output_t *output, DeckLinkDeviceDiscovery *discovery);
-	~DeckLinkOutput() override;
+	std::string deviceHash;
+	long long modeID = 0;
 
 	obs_output_t *GetOutput() const;
-	bool Activate(DeckLinkDevice *device, long long modeId) override;
-	void Deactivate() override;
-
-	void UpdateVideoFrame(video_data *frame);
-	void WriteAudio(audio_data *frames);
-
-	void SetSize(int width, int height);
-	int GetWidth() const;
-	int GetHeight() const;
-
-	void SetBufferCount(int count);
-	int GetBufferCount() const;
+	bool Activate(DeckLinkDevice *device, DeckLinkDeviceMode *mode);
+	void Deactivate();
+	void UpdateVideoFrame(const video_data *frame);
+	void WriteAudio(const audio_data *frames);
 	int GetDroppedFrames() const;
+
+private:
+	obs_output_t *output;
+	mutable std::mutex instanceMutex;
+	std::unique_ptr<DeckLinkDeviceInstance> instance;
+	uint64_t finalDroppedFrames = 0;
 };

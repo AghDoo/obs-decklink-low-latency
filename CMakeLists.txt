@@ -33,7 +33,6 @@ target_sources(
   PRIVATE
     src/decklink/plugin-main.cpp
     src/decklink/decklink-output.cpp
-    src/decklink/DecklinkBase.cpp
     src/decklink/DeckLinkOutput.cpp
     src/decklink/decklink-device-instance.cpp
     ${OBS_DECKLINK_SOURCE_DIR}/decklink-device-discovery.cpp

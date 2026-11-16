@@ -1,352 +1,298 @@
 #include "decklink-device-instance.hpp"
 
-#include "DeckLinkOutput.hpp"
+#include <obs-module.h>
+#include <util/util_uint64.h>
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <optional>
+#include <system_error>
 #include <utility>
 
-#include <util/platform.h>
+#define LOG(level, message, ...) blog(level, "decklink-low-latency: " message, __VA_ARGS__)
 
-void FrameQueue::reset(size_t capacity)
+DeckLinkDeviceInstance::DeckLinkDeviceInstance(DeckLinkDevice *device_, DeckLinkDeviceMode *mode_)
+	: device(device_),
+	  mode(mode_)
 {
-	std::lock_guard<std::mutex> lock(mutex);
-	slots.assign(capacity, nullptr);
-	readIndex = 0;
-	writeIndex = 0;
-	count = 0;
-}
-
-bool FrameQueue::push(uint8_t *frame)
-{
-	if (!frame) {
-		return false;
-	}
-
-	std::lock_guard<std::mutex> lock(mutex);
-	if (slots.empty() || count == slots.size()) {
-		return false;
-	}
-
-	slots[writeIndex] = frame;
-	writeIndex = (writeIndex + 1) % slots.size();
-	++count;
-	return true;
-}
-
-uint8_t *FrameQueue::pop()
-{
-	std::lock_guard<std::mutex> lock(mutex);
-	if (count == 0) {
-		return nullptr;
-	}
-
-	uint8_t *frame = slots[readIndex];
-	slots[readIndex] = nullptr;
-	readIndex = (readIndex + 1) % slots.size();
-	--count;
-	return frame;
-}
-
-DeckLinkDeviceInstance::DeckLinkDeviceInstance(DecklinkBase *decklink_, DeckLinkDevice *device_)
-	: decklink(decklink_), device(device_)
-{
-	if (device) {
-		device->AddRef();
-	}
 }
 
 DeckLinkDeviceInstance::~DeckLinkDeviceInstance()
 {
 	StopOutput();
-	if (device) {
-		device->Release();
-		device = nullptr;
+}
+
+bool DeckLinkDeviceInstance::StartOutput()
+{
+	std::promise<bool> ready;
+	auto started = ready.get_future();
+	try {
+		worker = std::thread([this, ready = std::move(ready)]() mutable {
+			const HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+			if (FAILED(result)) {
+				LOG(LOG_ERROR, "Could not initialize DeckLink output thread COM: 0x%08lX", result);
+				ready.set_value(false);
+				return;
+			}
+			RunOutput(ready);
+			CoUninitialize();
+		});
+	} catch (const std::system_error &error) {
+		LOG(LOG_ERROR, "Could not start the DeckLink output thread: %s", error.what());
+		return false;
 	}
+	return started.get();
 }
 
-ULONG DeckLinkDeviceInstance::AddRef()
+void DeckLinkDeviceInstance::StopOutput()
 {
-	return ++refCount;
-}
-
-ULONG DeckLinkDeviceInstance::Release()
-{
-	const ULONG remaining = --refCount;
-	if (remaining == 0) {
-		delete this;
+	if (!worker.joinable()) {
+		return;
 	}
-	return remaining;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		stopping = true;
+	}
+	workReady.notify_one();
+	worker.join();
 }
 
-DeckLinkDevice *DeckLinkDeviceInstance::GetDevice() const
+void DeckLinkDeviceInstance::RunOutput(std::promise<bool> &ready)
 {
-	return device;
+	ComPtr<IDeckLinkOutput> output;
+	if (!device->GetOutput(&output)) {
+		LOG(LOG_ERROR, "Could not acquire the DeckLink output interface for %s",
+		    device->GetDisplayName().c_str());
+		ready.set_value(false);
+		return;
+	}
+
+	const int width = mode->GetWidth();
+	const int height = mode->GetHeight();
+	if (width <= 0 || height <= 0 || width > std::numeric_limits<int>::max() / 4) {
+		LOG(LOG_ERROR, "Invalid DeckLink output dimensions: %dx%d", width, height);
+		ready.set_value(false);
+		return;
+	}
+
+	HRESULT result = output->EnableVideoOutput(mode->GetDisplayMode(), bmdVideoOutputFlagDefault);
+	if (result != S_OK) {
+		LOG(LOG_ERROR, "EnableVideoOutput failed: 0x%08lX", result);
+		ready.set_value(false);
+		return;
+	}
+
+	VideoFrames frames;
+	rowBytes = static_cast<size_t>(width) * 4;
+	for (size_t i = 0; i < frames.size(); ++i) {
+		result = output->CreateVideoFrame(width, height, static_cast<int32_t>(rowBytes), bmdFormat8BitBGRA,
+						  bmdFrameFlagDefault, &frames[i]);
+		void *bytes = nullptr;
+		if (result != S_OK || !frames[i] || frames[i]->GetBytes(&bytes) != S_OK || !bytes) {
+			LOG(LOG_ERROR, "Could not allocate a writable DeckLink video frame (CreateVideoFrame: 0x%08lX)",
+			    result);
+			output->DisableVideoOutput();
+			ready.set_value(false);
+			return;
+		}
+		frameBytes[i] = static_cast<uint8_t *>(bytes);
+	}
+
+	result = output->EnableAudioOutput(bmdAudioSampleRate48kHz, bmdAudioSampleType16bitInteger, audioChannels,
+					   bmdAudioOutputStreamContinuous);
+	if (result != S_OK) {
+		LOG(LOG_ERROR, "EnableAudioOutput failed: 0x%08lX", result);
+		output->DisableVideoOutput();
+		ready.set_value(false);
+		return;
+	}
+
+	LOG(LOG_INFO, "Synchronous output on %s: %s (%dx%d), stereo PCM 48 kHz, one pending video frame",
+	    device->GetDisplayName().c_str(), mode->GetName().c_str(), width, height);
+	ready.set_value(true);
+	SendFrames(output, frames);
+	output->FlushBufferedAudioSamples();
+	output->DisableAudioOutput();
+	output->DisableVideoOutput();
 }
 
-long long DeckLinkDeviceInstance::GetActiveModeId() const
+void DeckLinkDeviceInstance::UpdateVideoFrame(const video_data *frame)
 {
-	return mode ? mode->GetId() : 0;
+	if (!frame || !frame->data[0] || frame->linesize[0] < rowBytes) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (stopping) {
+			return;
+		}
+		// 待送緩衝只保留最新畫面，驅動呼叫中的緩衝由輸出執行緒獨佔。
+		if (videoPending) {
+			droppedVideoFrames.fetch_add(1, std::memory_order_relaxed);
+		}
+		uint8_t *destination = frameBytes[pendingSlot];
+		for (int y = 0; y < mode->GetHeight(); ++y) {
+			const auto row = static_cast<size_t>(y);
+			std::memcpy(destination + row * rowBytes, frame->data[0] + row * frame->linesize[0], rowBytes);
+		}
+		pendingTimestamp = frame->timestamp;
+		videoPending = true;
+	}
+	workReady.notify_one();
 }
 
-int DeckLinkDeviceInstance::GetBufferCount() const
+void DeckLinkDeviceInstance::WriteAudio(const audio_data *frames)
 {
-	return bufferCount;
+	if (!frames || !frames->data[0] || frames->frames == 0) {
+		return;
+	}
+
+	const size_t count = std::min<size_t>(frames->frames, maxQueuedAudioFrames);
+	const size_t skipped = frames->frames - count;
+	AudioBlock block{std::vector<int16_t>(count * audioChannels),
+			 frames->timestamp + util_mul_div64(skipped, 1000000000ULL, audioSampleRate), Clock::now()};
+	constexpr size_t bytesPerFrame = audioChannels * sizeof(int16_t);
+	std::memcpy(block.samples.data(), frames->data[0] + skipped * bytesPerFrame, count * bytesPerFrame);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (stopping) {
+			return;
+		}
+		droppedAudioFrames.fetch_add(skipped, std::memory_order_relaxed);
+		while (queuedAudioFrames + count > maxQueuedAudioFrames) {
+			const size_t discarded = audioQueue.front().frameCount();
+			droppedAudioFrames.fetch_add(discarded, std::memory_order_relaxed);
+			queuedAudioFrames -= discarded;
+			audioQueue.pop_front();
+		}
+		queuedAudioFrames += count;
+		audioQueue.push_back(std::move(block));
+	}
+	workReady.notify_one();
+}
+
+void DeckLinkDeviceInstance::SendFrames(IDeckLinkOutput *output, const VideoFrames &frames)
+{
+	std::optional<uint64_t> firstVideoTimestamp;
+	std::optional<AudioBlock> audio;
+	size_t audioOffset = 0;
+	auto audioRetryAt = Clock::time_point::min();
+	uint64_t displayed = 0;
+	uint64_t videoErrors = 0;
+	uint64_t audioErrors = 0;
+	uint64_t audioSubmitted = 0;
+	uint64_t audioPartialWrites = 0;
+	std::chrono::microseconds longestVideoCall{0};
+
+	for (;;) {
+		std::optional<size_t> videoSlot;
+		uint64_t videoTimestamp = 0;
+		{
+			std::unique_lock<std::mutex> lock(mutex);
+			const auto hasWork = [&] {
+				return stopping || videoPending ||
+				       (firstVideoTimestamp &&
+					(audio ? Clock::now() >= audioRetryAt : !audioQueue.empty()));
+			};
+			if (audio) {
+				workReady.wait_until(lock, audioRetryAt, hasWork);
+			} else {
+				workReady.wait(lock, hasWork);
+			}
+			if (stopping) {
+				break;
+			}
+			if (videoPending) {
+				videoSlot = pendingSlot;
+				videoTimestamp = pendingTimestamp;
+				pendingSlot = 1 - pendingSlot;
+				videoPending = false;
+			}
+			if (firstVideoTimestamp && !audio && !audioQueue.empty()) {
+				queuedAudioFrames -= audioQueue.front().frameCount();
+				audio.emplace(std::move(audioQueue.front()));
+				audioQueue.pop_front();
+				const uint64_t trim = *firstVideoTimestamp > audio->timestamp
+							      ? *firstVideoTimestamp - audio->timestamp
+							      : 0;
+				audioOffset = static_cast<size_t>(std::min<uint64_t>(
+					audio->frameCount(), util_mul_div64(trim, audioSampleRate, 1000000000ULL)));
+				audioRetryAt = Clock::time_point::min();
+			}
+		}
+
+		if (videoSlot) {
+			const auto started = Clock::now();
+			const HRESULT result = output->DisplayVideoFrameSync(frames[*videoSlot]);
+			longestVideoCall =
+				std::max(longestVideoCall,
+					 std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - started));
+			if (result == S_OK) {
+				if (!firstVideoTimestamp) {
+					firstVideoTimestamp = videoTimestamp;
+					LOG(LOG_INFO,
+					    "First video frame accepted by DisplayVideoFrameSync (OBS timestamp %llu)",
+					    static_cast<unsigned long long>(videoTimestamp));
+				}
+				++displayed;
+			} else {
+				if (++videoErrors == 1) {
+					LOG(LOG_ERROR, "DisplayVideoFrameSync failed: 0x%08lX", result);
+				}
+				droppedVideoFrames.fetch_add(1, std::memory_order_relaxed);
+			}
+		}
+
+		if (!audio || Clock::now() < audioRetryAt) {
+			continue;
+		}
+		const size_t remaining = audio->frameCount() - audioOffset;
+		if (remaining == 0 || Clock::now() - audio->received >= maxAudioAge) {
+			droppedAudioFrames.fetch_add(remaining, std::memory_order_relaxed);
+			audio.reset();
+			continue;
+		}
+
+		uint32_t written = 0;
+		const HRESULT result =
+			output->WriteAudioSamplesSync(audio->samples.data() + audioOffset * audioChannels,
+						      static_cast<uint32_t>(remaining), &written);
+		if (result != S_OK) {
+			if (++audioErrors == 1) {
+				LOG(LOG_ERROR, "WriteAudioSamplesSync failed: 0x%08lX", result);
+			}
+			droppedAudioFrames.fetch_add(remaining, std::memory_order_relaxed);
+			audio.reset();
+		} else {
+			const size_t accepted = std::min<size_t>(written, remaining);
+			if (accepted > 0 && audioSubmitted == 0) {
+				LOG(LOG_INFO,
+				    "First stereo PCM block accepted by WriteAudioSamplesSync (%u sample frames)",
+				    written);
+			}
+			audioSubmitted += accepted;
+			if (accepted == remaining) {
+				audio.reset();
+			} else {
+				++audioPartialWrites;
+				audioOffset += accepted;
+				audioRetryAt = Clock::now() + std::chrono::milliseconds(2);
+			}
+		}
+	}
+
+	LOG(LOG_INFO,
+	    "Synchronous output stopped: video sent=%llu, video dropped=%llu, video errors=%llu, max video call=%lld us, "
+	    "audio sent sample frames=%llu, audio discarded=%llu, audio partial writes=%llu, audio errors=%llu",
+	    static_cast<unsigned long long>(displayed), static_cast<unsigned long long>(GetDroppedFrames()),
+	    static_cast<unsigned long long>(videoErrors), static_cast<long long>(longestVideoCall.count()),
+	    static_cast<unsigned long long>(audioSubmitted),
+	    static_cast<unsigned long long>(droppedAudioFrames.load(std::memory_order_relaxed)),
+	    static_cast<unsigned long long>(audioPartialWrites), static_cast<unsigned long long>(audioErrors));
 }
 
 uint64_t DeckLinkDeviceInstance::GetDroppedFrames() const
 {
-	return droppedFrames.load(std::memory_order_relaxed);
-}
-
-bool DeckLinkDeviceInstance::StartOutput(DeckLinkDeviceMode *mode_, int bufferCount_)
-{
-	if (mode || !mode_ || !device || !decklink) {
-		return false;
-	}
-
-	auto *decklinkOutput = dynamic_cast<DeckLinkOutput *>(decklink);
-	if (!decklinkOutput) {
-		return false;
-	}
-
-	ComPtr<IDeckLinkOutput> output_;
-	if (!device->GetOutput(&output_)) {
-		LOG(LOG_ERROR, "Could not acquire the DeckLink output interface");
-		return false;
-	}
-
-	HRESULT result = output_->EnableVideoOutput(mode_->GetDisplayMode(), bmdVideoOutputFlagDefault);
-	if (result != S_OK) {
-		LOG(LOG_ERROR, "EnableVideoOutput failed: 0x%08X", result);
-		return false;
-	}
-
-	result = output_->EnableAudioOutput(bmdAudioSampleRate48kHz, bmdAudioSampleType16bitInteger, 2,
-						    bmdAudioOutputStreamTimestamped);
-	if (result != S_OK) {
-		LOG(LOG_ERROR, "EnableAudioOutput failed: 0x%08X", result);
-		output_->DisableVideoOutput();
-		return false;
-	}
-
-	if (!mode_->GetFrameRate(&frameDuration, &frameTimescale) || frameDuration <= 0 || frameTimescale <= 0) {
-		LOG(LOG_ERROR, "Could not read the selected DeckLink mode frame rate");
-		output_->DisableAudioOutput();
-		output_->DisableVideoOutput();
-		return false;
-	}
-
-	const int width = decklinkOutput->GetWidth();
-	const int height = decklinkOutput->GetHeight();
-	if (width <= 0 || height <= 0 || width > (std::numeric_limits<int>::max() / 4)) {
-		LOG(LOG_ERROR, "Invalid DeckLink output dimensions: %dx%d", width, height);
-		output_->DisableAudioOutput();
-		output_->DisableVideoOutput();
-		return false;
-	}
-
-	const int rowSize = width * 4;
-	const size_t frameSize = static_cast<size_t>(rowSize) * static_cast<size_t>(height);
-	if (frameSize / static_cast<size_t>(height) != static_cast<size_t>(rowSize)) {
-		LOG(LOG_ERROR, "DeckLink frame buffer size overflow");
-		output_->DisableAudioOutput();
-		output_->DisableVideoOutput();
-		return false;
-	}
-
-	bufferCount = (bufferCount_ <= 2) ? 2 : 3;
-	frameBlobs.clear();
-	frameBlobs.resize(static_cast<size_t>(bufferCount));
-	freeFrames.reset(static_cast<size_t>(bufferCount));
-	readyFrames.reset(static_cast<size_t>(bufferCount));
-	activeBlob = nullptr;
-	droppedFrames.store(0, std::memory_order_relaxed);
-
-	for (auto &blob : frameBlobs) {
-		blob.assign(frameSize, 0);
-		if (!freeFrames.push(blob.data())) {
-			LOG(LOG_ERROR, "Could not initialize the frame buffer pool");
-			frameBlobs.clear();
-			output_->DisableAudioOutput();
-			output_->DisableVideoOutput();
-			return false;
-		}
-	}
-
-	const int64_t reportedMinimum = device->GetMinimumPrerollFrames();
-	const int64_t minimumPrerollFrames = std::max<int64_t>(reportedMinimum, bufferCount);
-	LOG(LOG_INFO, "Starting %s at %dx%d, %lld/%lld fps; software buffers=%d, device minimum preroll=%lld, scheduled preroll=%lld",
-	    device->GetDisplayName().c_str(), width, height, static_cast<long long>(frameTimescale),
-	    static_cast<long long>(frameDuration), bufferCount, static_cast<long long>(reportedMinimum),
-	    static_cast<long long>(minimumPrerollFrames));
-
-	for (int64_t i = 0; i < minimumPrerollFrames; ++i) {
-		ComPtr<IDeckLinkMutableVideoFrame> prerollFrame;
-		result = output_->CreateVideoFrame(width, height, rowSize, bmdFormat8BitBGRA, bmdFrameFlagDefault,
-						   &prerollFrame);
-		if (result != S_OK || !prerollFrame) {
-			LOG(LOG_ERROR, "CreateVideoFrame failed during preroll: 0x%08X", result);
-			output_->DisableAudioOutput();
-			output_->DisableVideoOutput();
-			frameBlobs.clear();
-			return false;
-		}
-
-		void *bytes = nullptr;
-		if (SUCCEEDED(prerollFrame->GetBytes(&bytes)) && bytes) {
-			std::memset(bytes, 0, frameSize);
-		}
-
-		result = output_->ScheduleVideoFrame(prerollFrame, i * frameDuration, frameDuration, frameTimescale);
-		if (result != S_OK) {
-			LOG(LOG_ERROR, "ScheduleVideoFrame failed during preroll: 0x%08X", result);
-			output_->DisableAudioOutput();
-			output_->DisableVideoOutput();
-			frameBlobs.clear();
-			return false;
-		}
-	}
-
-	totalFramesScheduled = minimumPrerollFrames;
-	*renderDelegate.Assign() = new RenderDelegate<DeckLinkDeviceInstance>(this);
-
-	output = std::move(output_);
-	mode = mode_;
-
-	result = output->SetScheduledFrameCompletionCallback(renderDelegate);
-	if (result != S_OK) {
-		LOG(LOG_ERROR, "SetScheduledFrameCompletionCallback failed: 0x%08X", result);
-		StopOutput();
-		return false;
-	}
-
-	result = output->StartScheduledPlayback(0, 100, 1.0);
-	if (result != S_OK) {
-		LOG(LOG_ERROR, "StartScheduledPlayback failed: 0x%08X", result);
-		StopOutput();
-		return false;
-	}
-
-	return true;
-}
-
-bool DeckLinkDeviceInstance::StopOutput()
-{
-	if (!output) {
-		mode = nullptr;
-		return false;
-	}
-
-	output->SetScheduledFrameCompletionCallback(nullptr);
-	output->StopScheduledPlayback(0, nullptr, frameTimescale);
-	output->DisableVideoOutput();
-	output->DisableAudioOutput();
-	output.Clear();
-	renderDelegate.Clear();
-
-	freeFrames.reset(0);
-	readyFrames.reset(0);
-	frameBlobs.clear();
-	activeBlob = nullptr;
-	mode = nullptr;
-	totalFramesScheduled = 0;
-
-	return true;
-}
-
-void DeckLinkDeviceInstance::UpdateVideoFrame(video_data *frame)
-{
-	if (!frame || !frame->data[0] || !mode) {
-		return;
-	}
-
-	auto *decklinkOutput = dynamic_cast<DeckLinkOutput *>(decklink);
-	if (!decklinkOutput) {
-		return;
-	}
-
-	const int width = decklinkOutput->GetWidth();
-	const int height = decklinkOutput->GetHeight();
-	const size_t rowBytes = static_cast<size_t>(width) * 4;
-	if (width <= 0 || height <= 0 || frame->linesize[0] < rowBytes) {
-		return;
-	}
-
-	uint8_t *blob = freeFrames.pop();
-
-	// If every buffer is in use, replace the oldest waiting frame instead of
-	// allowing stale frames to build up behind the DeckLink playback clock.
-	if (!blob) {
-		blob = readyFrames.pop();
-		if (blob) {
-			droppedFrames.fetch_add(1, std::memory_order_relaxed);
-		}
-	}
-
-	if (!blob) {
-		droppedFrames.fetch_add(1, std::memory_order_relaxed);
-		return;
-	}
-
-	for (int y = 0; y < height; ++y) {
-		std::memcpy(blob + static_cast<size_t>(y) * rowBytes,
-			    frame->data[0] + static_cast<size_t>(y) * frame->linesize[0], rowBytes);
-	}
-
-	if (!readyFrames.push(blob)) {
-		freeFrames.push(blob);
-		droppedFrames.fetch_add(1, std::memory_order_relaxed);
-	}
-}
-
-void DeckLinkDeviceInstance::ScheduleVideoFrame(IDeckLinkVideoFrame *frame)
-{
-	if (!output || !frame) {
-		return;
-	}
-
-	void *bytes = nullptr;
-	if (FAILED(frame->GetBytes(&bytes)) || !bytes) {
-		LOG(LOG_WARNING, "Could not access a completed DeckLink video frame");
-		return;
-	}
-
-	uint8_t *nextBlob = readyFrames.pop();
-	if (nextBlob) {
-		if (activeBlob && !freeFrames.push(activeBlob)) {
-			LOG(LOG_WARNING, "Frame buffer pool recycle failed");
-		}
-		activeBlob = nextBlob;
-	}
-
-	const size_t frameSize = static_cast<size_t>(frame->GetRowBytes()) *
-				 static_cast<size_t>(frame->GetHeight());
-	if (activeBlob && !frameBlobs.empty() && frameSize <= frameBlobs.front().size()) {
-		std::memcpy(bytes, activeBlob, frameSize);
-	} else {
-		std::memset(bytes, 0, frameSize);
-	}
-
-	const HRESULT result = output->ScheduleVideoFrame(frame, totalFramesScheduled * frameDuration,
-							  frameDuration, frameTimescale);
-	if (result == S_OK) {
-		++totalFramesScheduled;
-	} else {
-		LOG(LOG_ERROR, "Could not schedule the next DeckLink frame: 0x%08X", result);
-	}
-}
-
-void DeckLinkDeviceInstance::WriteAudio(audio_data *frames)
-{
-	if (!output || !frames || !frames->data[0] || frames->frames == 0) {
-		return;
-	}
-
-	uint32_t sampleFramesWritten = 0;
-	const HRESULT result = output->WriteAudioSamplesSync(frames->data[0], frames->frames, &sampleFramesWritten);
-	if (result != S_OK) {
-		LOG(LOG_WARNING, "WriteAudioSamplesSync failed: 0x%08X", result);
-	}
+	return droppedVideoFrames.load(std::memory_order_relaxed);
 }

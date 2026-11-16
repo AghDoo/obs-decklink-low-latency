@@ -31,8 +31,6 @@ jobs:
           ./build-aux/run-clang-format \
             src/decklink/DeckLinkOutput.cpp \
             src/decklink/DeckLinkOutput.hpp \
-            src/decklink/DecklinkBase.cpp \
-            src/decklink/DecklinkBase.h \
             src/decklink/decklink-device-instance.cpp \
             src/decklink/decklink-device-instance.hpp \
             src/decklink/decklink-output.cpp \
@@ -47,8 +45,6 @@ jobs:
           cp CMakeLists.txt format-output/
           cp src/decklink/DeckLinkOutput.cpp format-output/src/decklink/
           cp src/decklink/DeckLinkOutput.hpp format-output/src/decklink/
-          cp src/decklink/DecklinkBase.cpp format-output/src/decklink/
-          cp src/decklink/DecklinkBase.h format-output/src/decklink/
           cp src/decklink/decklink-device-instance.cpp format-output/src/decklink/
           cp src/decklink/decklink-device-instance.hpp format-output/src/decklink/
           cp src/decklink/decklink-output.cpp format-output/src/decklink/

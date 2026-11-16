@@ -63,7 +63,6 @@ public:
 		auto *form = new QFormLayout(this);
 		form->addRow(QString::fromUtf8(obs_module_text("Device")), &device);
 		form->addRow(QString::fromUtf8(obs_module_text("OutputMode")), &mode);
-		form->addRow(QString::fromUtf8(obs_module_text("BufferCount")), &buffers);
 		form->addRow(&autoStart);
 		status.setWordWrap(true);
 		form->addRow(&status);
@@ -79,7 +78,7 @@ public:
 		autoStart.setChecked(obs_data_get_bool(settings, autoStartKey));
 
 		connect(&device, &QComboBox::currentIndexChanged, this, [this] { refreshModes(); });
-		for (QComboBox *combo : {&device, &mode, &buffers}) {
+		for (QComboBox *combo : {&device, &mode}) {
 			connect(combo, &QComboBox::activated, this, [this] { saveSettings(); });
 		}
 		connect(&autoStart, &QCheckBox::toggled, this, [this] { saveSettings(); });
@@ -136,14 +135,8 @@ private:
 			return;
 		}
 		properties = obs_get_output_properties(outputId);
-		const OBSDataAutoRelease defaults = obs_output_defaults(outputId);
 		fillChoices(device, obs_properties_get(properties, DEVICE_HASH),
 			    QString::fromUtf8(obs_data_get_string(settings, DEVICE_HASH)));
-		const long long bufferCount = obs_data_has_user_value(settings, BUFFER_COUNT)
-						      ? obs_data_get_int(settings, BUFFER_COUNT)
-						      : obs_data_get_int(defaults, BUFFER_COUNT);
-		fillChoices(buffers, obs_properties_get(properties, BUFFER_COUNT),
-			    QVariant::fromValue<qlonglong>(bufferCount));
 		refreshModes();
 	}
 
@@ -170,9 +163,7 @@ private:
 		const bool idle = !output;
 		device.setEnabled(idle && device.count() > 0);
 		mode.setEnabled(idle && mode.count() > 0);
-		buffers.setEnabled(idle && buffers.count() > 0);
-		startButton.setEnabled(idle && device.currentIndex() >= 0 && mode.currentIndex() >= 0 &&
-				       buffers.currentIndex() >= 0);
+		startButton.setEnabled(idle && device.currentIndex() >= 0 && mode.currentIndex() >= 0);
 		stopButton.setEnabled(!idle);
 		if (!idle) {
 			setStatus("Running");
@@ -189,11 +180,10 @@ private:
 
 	void saveSettings()
 	{
-		if (device.currentIndex() >= 0 && mode.currentIndex() >= 0 && buffers.currentIndex() >= 0) {
+		if (device.currentIndex() >= 0 && mode.currentIndex() >= 0) {
 			obs_data_set_string(settings, DEVICE_HASH,
 					    device.currentData().toString().toUtf8().constData());
 			obs_data_set_int(settings, MODE_ID, mode.currentData().toLongLong());
-			obs_data_set_int(settings, BUFFER_COUNT, buffers.currentData().toLongLong());
 		}
 		obs_data_set_bool(settings, autoStartKey, autoStart.isChecked());
 		const BPtr<char> path = obs_module_config_path(settingsFile);
@@ -239,7 +229,6 @@ private:
 
 	QComboBox device;
 	QComboBox mode;
-	QComboBox buffers;
 	QCheckBox autoStart{QString::fromUtf8(obs_module_text("AutoStart"))};
 	QLabel status;
 	QPushButton startButton{QString::fromUtf8(obs_module_text("Start"))};

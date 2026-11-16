@@ -6,11 +6,8 @@
 #include "decklink-devices.hpp"
 
 #include <media-io/video-scaler.h>
-#include <util/util_uint64.h>
 
-#include <algorithm>
 #include <cstring>
-#include <limits>
 
 static void decklink_output_destroy(void *data)
 {
@@ -19,12 +16,12 @@ static void decklink_output_destroy(void *data)
 
 static void decklink_output_set_video_conversion(DeckLinkOutput *decklink)
 {
-	if (!decklink->deviceHash || !*decklink->deviceHash) {
+	if (decklink->deviceHash.empty()) {
 		return;
 	}
 
 	ComPtr<DeckLinkDevice> device;
-	device.Set(deviceEnum->FindByHash(decklink->deviceHash));
+	device.Set(deviceEnum->FindByHash(decklink->deviceHash.c_str()));
 	if (!device) {
 		return;
 	}
@@ -45,10 +42,9 @@ static void decklink_output_set_video_conversion(DeckLinkOutput *decklink)
 
 static void *decklink_output_create(obs_data_t *settings, obs_output_t *output)
 {
-	auto *decklink = new DeckLinkOutput(output, deviceEnum);
+	auto *decklink = new DeckLinkOutput(output);
 	decklink->deviceHash = obs_data_get_string(settings, DEVICE_HASH);
 	decklink->modeID = obs_data_get_int(settings, MODE_ID);
-	decklink->SetBufferCount(static_cast<int>(obs_data_get_int(settings, BUFFER_COUNT)));
 
 	decklink_output_set_video_conversion(decklink);
 	return decklink;
@@ -59,13 +55,7 @@ static void decklink_output_update(void *data, obs_data_t *settings)
 	auto *decklink = static_cast<DeckLinkOutput *>(data);
 	decklink->deviceHash = obs_data_get_string(settings, DEVICE_HASH);
 	decklink->modeID = obs_data_get_int(settings, MODE_ID);
-	decklink->SetBufferCount(static_cast<int>(obs_data_get_int(settings, BUFFER_COUNT)));
 	decklink_output_set_video_conversion(decklink);
-}
-
-static void decklink_output_defaults(obs_data_t *settings)
-{
-	obs_data_set_default_int(settings, BUFFER_COUNT, 2);
 }
 
 static bool decklink_output_start(void *data)
@@ -78,18 +68,13 @@ static bool decklink_output_start(void *data)
 		return false;
 	}
 
-	if (!decklink->deviceHash || !*decklink->deviceHash) {
+	if (decklink->deviceHash.empty()) {
 		blog(LOG_WARNING, "No DeckLink device has been selected");
 		return false;
 	}
 
-	decklink->audio_samplerate = 48000;
-	decklink->audio_planes = 2;
-	decklink->audio_size = get_audio_size(AUDIO_FORMAT_16BIT, SPEAKERS_STEREO, 1);
-	decklink->start_timestamp = 0;
-
 	ComPtr<DeckLinkDevice> device;
-	device.Set(deviceEnum->FindByHash(decklink->deviceHash));
+	device.Set(deviceEnum->FindByHash(decklink->deviceHash.c_str()));
 	if (!device) {
 		blog(LOG_ERROR, "Selected DeckLink device is not available");
 		return false;
@@ -112,8 +97,7 @@ static bool decklink_output_start(void *data)
 		return false;
 	}
 
-	decklink->SetSize(mode->GetWidth(), mode->GetHeight());
-	if (!decklink->Activate(device, decklink->modeID)) {
+	if (!decklink->Activate(device, mode)) {
 		blog(LOG_ERROR, "Could not activate the selected DeckLink output");
 		return false;
 	}
@@ -121,7 +105,7 @@ static bool decklink_output_start(void *data)
 	struct audio_convert_info audioConversion = {};
 	audioConversion.format = AUDIO_FORMAT_16BIT;
 	audioConversion.speakers = SPEAKERS_STEREO;
-	audioConversion.samples_per_sec = 48000;
+	audioConversion.samples_per_sec = DeckLinkDeviceInstance::audioSampleRate;
 	obs_output_set_audio_conversion(decklink->GetOutput(), &audioConversion);
 
 	if (!obs_output_begin_data_capture(decklink->GetOutput(), 0)) {
@@ -136,54 +120,18 @@ static bool decklink_output_start(void *data)
 static void decklink_output_stop(void *data, uint64_t)
 {
 	auto *decklink = static_cast<DeckLinkOutput *>(data);
-	obs_output_end_data_capture(decklink->GetOutput());
 	decklink->Deactivate();
+	obs_output_end_data_capture(decklink->GetOutput());
 }
 
 static void decklink_output_raw_video(void *data, video_data *frame)
 {
-	auto *decklink = static_cast<DeckLinkOutput *>(data);
-	if (!decklink->start_timestamp) {
-		decklink->start_timestamp = frame->timestamp;
-	}
-	decklink->UpdateVideoFrame(frame);
-}
-
-static bool prepare_audio(DeckLinkOutput *decklink, const audio_data *frame, audio_data *output)
-{
-	*output = *frame;
-
-	if (frame->timestamp < decklink->start_timestamp) {
-		const uint64_t duration = util_mul_div64(frame->frames, 1000000000ULL, decklink->audio_samplerate);
-		const uint64_t endTimestamp = frame->timestamp + duration;
-		if (endTimestamp <= decklink->start_timestamp) {
-			return false;
-		}
-
-		uint64_t cutoff = decklink->start_timestamp - frame->timestamp;
-		output->timestamp += cutoff;
-		cutoff = util_mul_div64(cutoff, decklink->audio_samplerate, 1000000000ULL);
-
-		for (size_t i = 0; i < decklink->audio_planes; ++i) {
-			output->data[i] += decklink->audio_size * static_cast<size_t>(cutoff);
-		}
-		output->frames -= static_cast<uint32_t>(cutoff);
-	}
-
-	return true;
+	static_cast<DeckLinkOutput *>(data)->UpdateVideoFrame(frame);
 }
 
 static void decklink_output_raw_audio(void *data, audio_data *frames)
 {
-	auto *decklink = static_cast<DeckLinkOutput *>(data);
-	if (!decklink->start_timestamp) {
-		return;
-	}
-
-	audio_data output = {};
-	if (prepare_audio(decklink, frames, &output)) {
-		decklink->WriteAudio(&output);
-	}
+	static_cast<DeckLinkOutput *>(data)->WriteAudio(frames);
 }
 
 static bool decklink_output_device_changed(obs_properties_t *props, obs_property_t *list, obs_data_t *settings)
@@ -208,7 +156,8 @@ static bool decklink_output_device_changed(obs_properties_t *props, obs_property
 	}
 
 	if (!found) {
-		obs_property_list_insert_string(list, 0, deviceName && *deviceName ? deviceName : "Unavailable device", hash);
+		obs_property_list_insert_string(list, 0, deviceName && *deviceName ? deviceName : "Unavailable device",
+						hash);
 		obs_property_list_item_disable(list, 0, true);
 	}
 
@@ -246,13 +195,13 @@ static obs_properties_t *decklink_output_properties(void *data)
 
 	obs_properties_add_list(props, MODE_ID, TEXT_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 
-	if (decklink && decklink->deviceHash && *decklink->deviceHash) {
+	if (decklink && !decklink->deviceHash.empty()) {
 		obs_data_t *settings = obs_data_create();
-		obs_data_set_string(settings, DEVICE_HASH, decklink->deviceHash);
+		obs_data_set_string(settings, DEVICE_HASH, decklink->deviceHash.c_str());
 		obs_data_set_int(settings, MODE_ID, decklink->modeID);
 
 		ComPtr<DeckLinkDevice> device;
-		device.Set(deviceEnum->FindByHash(decklink->deviceHash));
+		device.Set(deviceEnum->FindByHash(decklink->deviceHash.c_str()));
 		if (device) {
 			obs_data_set_string(settings, DEVICE_NAME, device->GetDisplayName().c_str());
 			DeckLinkDeviceMode *mode = device->FindOutputMode(decklink->modeID);
@@ -264,11 +213,6 @@ static obs_properties_t *decklink_output_properties(void *data)
 		decklink_output_device_changed(props, deviceList, settings);
 		obs_data_release(settings);
 	}
-
-	obs_property_t *bufferList =
-		obs_properties_add_list(props, BUFFER_COUNT, TEXT_BUFFER_COUNT, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	obs_property_list_add_int(bufferList, "2 - Low latency", 2);
-	obs_property_list_add_int(bufferList, "3 - Compatibility", 3);
 
 	return props;
 }
@@ -297,7 +241,6 @@ struct obs_output_info create_decklink_output_info()
 	info.raw_video = decklink_output_raw_video;
 	info.raw_audio = decklink_output_raw_audio;
 	info.update = decklink_output_update;
-	info.get_defaults = decklink_output_defaults;
 	info.get_dropped_frames = decklink_output_get_dropped_frames;
 	return info;
 }

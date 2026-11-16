@@ -1,126 +1,65 @@
 #pragma once
 
-#include "platform.hpp"
 #include "decklink-device.hpp"
 
+#include <array>
 #include <atomic>
-#include <cstddef>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <future>
 #include <mutex>
+#include <thread>
 #include <vector>
 
-#define LOG(level, message, ...) blog(level, "%s: " message, "decklink-low-latency", ##__VA_ARGS__)
-
-class DecklinkBase;
 struct audio_data;
 struct video_data;
 
-class FrameQueue {
-private:
-	std::mutex mutex;
-	std::vector<uint8_t *> slots;
-	size_t readIndex = 0;
-	size_t writeIndex = 0;
-	size_t count = 0;
-
-public:
-	void reset(size_t capacity);
-	bool push(uint8_t *frame);
-	uint8_t *pop();
-};
-
-class DeckLinkDeviceInstance;
-
-template<typename T> class RenderDelegate final : public IDeckLinkVideoOutputCallback {
-private:
-	std::atomic<ULONG> refCount{1};
-	T *owner;
-
-public:
-	explicit RenderDelegate(T *owner_) : owner(owner_) {}
-
-	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, LPVOID *ppv) override
-	{
-		if (!ppv) {
-			return E_POINTER;
-		}
-
-		*ppv = nullptr;
-		if (IsEqualIID(iid, IID_IUnknown) || IsEqualIID(iid, IID_IDeckLinkVideoOutputCallback)) {
-			*ppv = static_cast<IDeckLinkVideoOutputCallback *>(this);
-			AddRef();
-			return S_OK;
-		}
-
-		return E_NOINTERFACE;
-	}
-
-	ULONG STDMETHODCALLTYPE AddRef() override
-	{
-		return ++refCount;
-	}
-
-	ULONG STDMETHODCALLTYPE Release() override
-	{
-		const ULONG remaining = --refCount;
-		if (remaining == 0) {
-			delete this;
-		}
-		return remaining;
-	}
-
-	HRESULT STDMETHODCALLTYPE ScheduledFrameCompleted(IDeckLinkVideoFrame *completedFrame,
-								  BMDOutputFrameCompletionResult) override
-	{
-		if (owner) {
-			owner->ScheduleVideoFrame(completedFrame);
-		}
-		return S_OK;
-	}
-
-	HRESULT STDMETHODCALLTYPE ScheduledPlaybackHasStopped() override
-	{
-		return S_OK;
-	}
-};
-
 class DeckLinkDeviceInstance {
-private:
-	std::atomic<ULONG> refCount{1};
-	DecklinkBase *decklink = nullptr;
-	DeckLinkDevice *device = nullptr;
-	DeckLinkDeviceMode *mode = nullptr;
-
-	ComPtr<IDeckLinkOutput> output;
-	ComPtr<RenderDelegate<DeckLinkDeviceInstance>> renderDelegate;
-
-	std::vector<std::vector<uint8_t>> frameBlobs;
-	FrameQueue freeFrames;
-	FrameQueue readyFrames;
-	uint8_t *activeBlob = nullptr;
-
-	BMDTimeValue frameDuration = 0;
-	BMDTimeScale frameTimescale = 0;
-	int64_t totalFramesScheduled = 0;
-	int bufferCount = 2;
-	std::atomic<uint64_t> droppedFrames{0};
-
 public:
-	DeckLinkDeviceInstance(DecklinkBase *decklink_, DeckLinkDevice *device_);
+	static constexpr uint32_t audioSampleRate = 48000;
+	static constexpr uint32_t audioChannels = 2;
+
+	DeckLinkDeviceInstance(DeckLinkDevice *device, DeckLinkDeviceMode *mode);
 	~DeckLinkDeviceInstance();
 
-	ULONG AddRef();
-	ULONG Release();
-
-	DeckLinkDevice *GetDevice() const;
-	long long GetActiveModeId() const;
-	int GetBufferCount() const;
+	bool StartOutput();
+	void StopOutput();
+	void UpdateVideoFrame(const video_data *frame);
+	void WriteAudio(const audio_data *frames);
 	uint64_t GetDroppedFrames() const;
 
-	bool StartOutput(DeckLinkDeviceMode *mode_, int bufferCount_);
-	bool StopOutput();
+private:
+	using Clock = std::chrono::steady_clock;
+	using VideoFrames = std::array<ComPtr<IDeckLinkMutableVideoFrame>, 2>;
+	static constexpr auto maxAudioAge = std::chrono::milliseconds(100);
+	static constexpr size_t maxQueuedAudioFrames = audioSampleRate / 10;
 
-	void UpdateVideoFrame(video_data *frame);
-	void ScheduleVideoFrame(IDeckLinkVideoFrame *frame);
-	void WriteAudio(audio_data *frames);
+	struct AudioBlock {
+		std::vector<int16_t> samples;
+		uint64_t timestamp;
+		Clock::time_point received;
+
+		size_t frameCount() const { return samples.size() / audioChannels; }
+	};
+
+	void RunOutput(std::promise<bool> &ready);
+	void SendFrames(IDeckLinkOutput *output, const VideoFrames &frames);
+
+	ComPtr<DeckLinkDevice> device;
+	DeckLinkDeviceMode *mode;
+	std::thread worker;
+	std::mutex mutex;
+	std::condition_variable workReady;
+	bool stopping = false;
+	std::array<uint8_t *, 2> frameBytes{};
+	size_t rowBytes = 0;
+	int pendingSlot = 0;
+	bool videoPending = false;
+	uint64_t pendingTimestamp = 0;
+	std::deque<AudioBlock> audioQueue;
+	size_t queuedAudioFrames = 0;
+	std::atomic<uint64_t> droppedVideoFrames{0};
+	std::atomic<uint64_t> droppedAudioFrames{0};
 };

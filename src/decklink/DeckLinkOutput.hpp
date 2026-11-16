@@ -37,4 +37,5 @@ public:
 
 	void SetBufferCount(int count);
 	int GetBufferCount() const;
+	int GetDroppedFrames() const;
 };

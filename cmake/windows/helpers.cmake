@@ -38,11 +38,11 @@ function(set_target_properties_plugin target)
   add_custom_command(
     TARGET ${target}
     POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>/${target}"
     COMMAND
       "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:${target}>"
       "$<$<CONFIG:Debug,RelWithDebInfo,Release>:$<TARGET_PDB_FILE:${target}>>"
-      "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>"
+      "${CMAKE_CURRENT_BINARY_DIR}/rundir/$<CONFIG>/${target}"
     COMMENT "Copy ${target} to rundir"
     VERBATIM
   )

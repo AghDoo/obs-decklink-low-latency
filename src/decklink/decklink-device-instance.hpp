@@ -4,6 +4,7 @@
 #include "decklink-device.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -98,7 +99,7 @@ private:
 
 	BMDTimeValue frameDuration = 0;
 	BMDTimeScale frameTimescale = 0;
-	uint64_t totalFramesScheduled = 0;
+	int64_t totalFramesScheduled = 0;
 	int bufferCount = 2;
 	std::atomic<uint64_t> droppedFrames{0};
 

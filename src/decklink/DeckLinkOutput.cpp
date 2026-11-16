@@ -118,3 +118,15 @@ int DeckLinkOutput::GetBufferCount() const
 {
 	return bufferCount;
 }
+
+int DeckLinkOutput::GetDroppedFrames() const
+{
+	if (!instance) {
+		return 0;
+	}
+
+	const uint64_t dropped = instance->GetDroppedFrames();
+	return dropped > static_cast<uint64_t>(std::numeric_limits<int>::max())
+		       ? std::numeric_limits<int>::max()
+		       : static_cast<int>(dropped);
+}
